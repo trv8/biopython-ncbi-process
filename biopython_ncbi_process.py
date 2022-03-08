@@ -5,8 +5,8 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
-Entrez.email = 'email@example.com'
-#Entrez.api_key = '0000'
+Entrez.email = 'test@example.com'
+Entrez.api_key = '00000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
 path_pmid = '../pmid'
@@ -16,10 +16,15 @@ path_articles = '../articles'
 default_search_term = '"Alzheimer Disease"[Mesh]'
 
 #Number of most recent articles to query
-n_articles_max = 100
+n_articles_max = 10000
 
 #Cache results
 paramEutils = { 'usehistory':'N' }
+
+
+
+#XML namespace
+ET.register_namespace('mml', "http://www.w3.org/1998/Math/MathML")
 
 ################################
 # Function Initialization
@@ -120,7 +125,8 @@ def get_xml_articles_given_pmids(PMID_list=[], file_path = path_articles, count=
             
             file_id += 1
 
-def merge_articles(file_path = path_articles):        
+def merge_articles(file_path = path_articles):
+    
     files = os.listdir(file_path)
     
     if '.DS_Store' in files:
@@ -145,8 +151,9 @@ def merge_articles(file_path = path_articles):
         for article in root:
             root_main.append(article)
 
-        tree_main.write(merged_filename)
+        tree_main.write(merged_filename, method = 'xml',encoding = 'utf-8')
         print('Successfully merged ' + files[i+1])
+
 
     tree = ET.parse(merged_filename)
     root = tree.getroot()
@@ -157,7 +164,6 @@ def merge_articles(file_path = path_articles):
         tostring = ET.tostring(root).decode('utf-8')
         file = f"{doc_type}{tostring}"
         xf.write(file)
-
 
 ################################
 # End Function Initialization
