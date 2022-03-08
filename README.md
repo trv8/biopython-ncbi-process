@@ -20,4 +20,4 @@ Entrez.email = 'your_email@example.com'
 
 
 Output:
-MeSH tags associated with the most recent 5 articles are outputted to the terminal.
+MeSH tags associated with the most recent 100 articles are outputted to the terminal.
