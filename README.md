@@ -1,7 +1,7 @@
 # biopython-ncbi-process
 Work in progress.
 
-Currently takes most recent 5 articles from NCBI's PubMed database matching search term "Alzheimer Disease"[MeSH] and returns the associated MeSH tags with these articles. Stores XML data on local disk to minimize number of queries to the PubMed database.
+Currently takes most recent 100 articles from NCBI's PubMed database matching search term "Alzheimer Disease"[MeSH] and returns the associated MeSH tags with these articles. Stores XML data on local disk to minimize number of queries to the PubMed database.
 
 Requirements:
 Python 3.8 https://www.python.org/ ,
