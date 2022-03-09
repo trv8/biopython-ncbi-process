@@ -5,25 +5,27 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
-Entrez.email = 'test@example.com'
-Entrez.api_key = '00000'
+Entrez.email = 'email@example.com'
+Entrez.api_key = '0000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
-path_pmid = '../pmid'
-path_articles = '../articles'
+path_pmid = './entrez_data/pmids'
+path_articles = './entrez_data/articles'
 
 #Search term for generating PMIDs in export_xml_pmids_given_mesh
-default_search_term = '"Alzheimer Disease"[Mesh]'
+default_search_term = 'Alzheimer'
 
 #Number of most recent articles to query
-n_articles_max = 10000
+n_articles_max = 25000
+
+#Exclude articles that are not MESH tagged?
+exclude_untagged = True
 
 #Cache results
-paramEutils = { 'usehistory':'N' }
+paramEutils = { 'usehistory':'Y' }
 
 
-
-#XML namespace
+#XML namespace (required for XML merge function)
 ET.register_namespace('mml', "http://www.w3.org/1998/Math/MathML")
 
 ################################
@@ -31,8 +33,8 @@ ET.register_namespace('mml', "http://www.w3.org/1998/Math/MathML")
 ################################
 
 def export_xml_pmids_given_searchterm(file_path = path_pmid, t=default_search_term, count=n_articles_max, batch_size=10000):
-    #For a search string 'term', returns the latest  articles matching that term, outputs pmids to xml
-    #Splits up requests in batches of size "increment"
+    #For a search string 'term', returns the latest PMIDs matching that term, outputs pmids to xml
+    #Splits up requests in batches of size "batch_size"
 
     file_id = 0
     
@@ -86,18 +88,8 @@ def import_xml_entrez(file_name):
     return record
 
 
-def get_xml_articles_given_pmids(PMID_list=[], file_path = path_articles, count=n_articles_max, batch_size=500 ):
-    #Given a python containing PMIDs, ['1234', '5678', ...], downloads articles as xml files to file_path_output, max # of 'count' articles
-
-    def list_to_string(PMID_list):
-        #Converts input PMIDs ['1234','5678'] to output string '1234,5678' for bioentrez parsing
-        s = ''
-        len_PMID = len(PMID_list)
-        for i in range(len_PMID):
-            s += PMID_list[i]
-            if i< (len_PMID-1):
-                s += ','
-        return s
+def get_xml_articles_given_pmids(PMID_list=[], file_path = path_articles, count=n_articles_max, batch_size=1000, **paramEutils ):
+    #Given a python list containing PMIDs, ['1234', '5678', ...], downloads articles as xml files to file_path_output, max # of 'count' articles
 
     file_id = 0
     
@@ -125,8 +117,8 @@ def get_xml_articles_given_pmids(PMID_list=[], file_path = path_articles, count=
             
             file_id += 1
 
-def merge_articles(file_path = path_articles):
-    
+def merge_articles(file_path = path_articles, output_file = 'merged.xml'):
+    #Merges XML files contained in file_path folder to an output file named 'merged.xml'
     files = os.listdir(file_path)
     
     if '.DS_Store' in files:
@@ -137,7 +129,7 @@ def merge_articles(file_path = path_articles):
 
     #Copy first xml to merged file
     source_filename = file_path + '/' + files[0]
-    merged_filename = file_path + '/' + 'merged.xml'
+    merged_filename = file_path + '/' + output_file
     shutil.copyfile(source_filename, merged_filename)
 
     #For additional xmls, append to merged
@@ -155,6 +147,7 @@ def merge_articles(file_path = path_articles):
         print('Successfully merged ' + files[i+1])
 
 
+
     tree = ET.parse(merged_filename)
     root = tree.getroot()
     
@@ -164,30 +157,114 @@ def merge_articles(file_path = path_articles):
         tostring = ET.tostring(root).decode('utf-8')
         file = f"{doc_type}{tostring}"
         xf.write(file)
+        
+
+
+def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_untagged):
+    #Returns a Pandas dataframe containing relevant information from XML files located at file_path folder
+    
+    files = os.listdir(file_path)
+    if '.DS_Store' in files:
+        files.remove('.DS_Store')
+    if 'merged.xml' in files:
+        files.remove('merged.xml')
+
+    PMID_df = []
+    Mesh_df = []
+    Desc_names_df = []
+    All_tags_df = []
+    All_tags_no_major_df = []
+        
+    for file in files:
+        file_dir = file_path + '/' + file
+        record = import_xml_entrez(file_dir)
+        num_articles = len(record['PubmedArticle'])
+
+        for a in range(num_articles):
+            PMID = str(record['PubmedArticle'][a]['MedlineCitation']['PMID'])
+            is_tagged = 'MeshHeadingList' in record['PubmedArticle'][a]['MedlineCitation'].keys()
+
+            if is_tagged:
+                mesh_of_article = record['PubmedArticle'][a]['MedlineCitation']['MeshHeadingList']
+            else:
+                mesh_of_article = []
+            
+            mesh_temp = []
+            desc_names_temp = []
+            all_tags_temp = []
+            all_tags_no_major_temp = []
+            
+            for i in range(len(mesh_of_article)):
+                mesh_temp.append(mesh_of_article[i])
+                desc_names_temp.append((str(mesh_of_article[i]['DescriptorName'])))
+
+
+                #If there are qualifiers present
+                if len(mesh_of_article[i]['QualifierName']) != 0:
+                    for j in range(len(mesh_of_article[i]['QualifierName'])):
+                        tag_str = str(mesh_of_article[i]['DescriptorName']) + '/' + mesh_of_article[i]['QualifierName'][j]
+                        tag_str_no_major = tag_str
+                        
+                        #Add * to subtopic if it's a major topic
+                        if dict(mesh_of_article[i]['QualifierName'][j].attributes.items())['MajorTopicYN'] == 'Y':
+                            tag_str += '*' 
+                        
+                        all_tags_temp.append(tag_str)
+                        all_tags_no_major_temp.append(tag_str_no_major)
+                else:
+                    tag_str = str(mesh_of_article[i]['DescriptorName'])
+                    tag_str_no_major = tag_str
+
+                    #Add * to main descriptor if it's a major topic itself
+                    if dict(mesh_of_article[i]['DescriptorName'].attributes.items())['MajorTopicYN'] == 'Y':
+                        tag_str += '*'
+                        
+                    all_tags_temp.append(tag_str)
+                    all_tags_no_major_temp.append(tag_str_no_major)
+                    
+            if not(not(is_tagged) and exclude_utag):
+                PMID_df.append(PMID)                   
+                Mesh_df.append(mesh_temp)
+                Desc_names_df.append(desc_names_temp)
+                All_tags_df.append(all_tags_temp)
+                All_tags_no_major_df.append(all_tags_no_major_temp)
+                
+    d = {'pmid': PMID_df, 'mesh': Mesh_df, 'major_tags': Desc_names_df, 'all_tags': All_tags_df,'all_tags_no_major': All_tags_no_major_df}
+    df = pd.DataFrame(data=d)
+    
+    return df
+
+def pd_freq_table(df, column = 'major_tags'):
+    #Returns a Pandas data frame containing Frequency data for tags in tag columns all_tags, major_tags, etc.
+    num_articles = len(df)
+    Temp_list = []
+    for i in range(len(df[column])):
+        for j in range(len(df[column][i])):
+            Temp_list.append(df[column][i][j])
+
+    Temp_list = pd.Series(Temp_list)
+    Freq_df = Temp_list.value_counts()
+    Freq_df = pd.DataFrame({column:Freq_df.index, 'count':Freq_df.values})
+    Freq_df['freq'] = Freq_df['count']/num_articles
+    
+    return Freq_df
 
 ################################
 # End Function Initialization
 ################################
 
 #Generate XML files for given search parameters
-export_xml_pmids_given_searchterm()
-P = import_pmid_xml_batch()
-get_xml_articles_given_pmids(PMID_list=P)
-merge_articles()
+##export_xml_pmids_given_searchterm()
+##P = import_pmid_xml_batch()
+##get_xml_articles_given_pmids(PMID_list=P)
 
-#Import records from merged.xml to test_record object
-merged_filename = path_articles + '/' + 'merged.xml'
-test_record = import_xml_entrez(merged_filename)
-num_articles = len(test_record['PubmedArticle'])
+#Use to generate main dataframe. Can comment and import .pkl files for faster use after generation
+#Using df.to_json('df.json') and pd.read_json('df.json')
 
-#Prints the DescriptorNames for the articles, a:
-for a in range(num_articles):
-    PMID = str(test_record['PubmedArticle'][a]['MedlineCitation']['PMID'])
-    print('\n'+'Article #' + str(a+1) + ' [PMID=' + PMID+']')
-    mesh_article = test_record['PubmedArticle'][a]['MedlineCitation']['MeshHeadingList']
-    for i in range(len(mesh_article)):
-        print(str(mesh_article[i]['DescriptorName']))
+#df = pd_dataframe_xml_multiple()
+#df.to_json('df.json')
 
+df = pd.read_json('df.json')
+df_freq = pd_freq_table(df, column = 'major_tags')
 
-#Access mesh ID instead of string descriptor
-#dict(record2['PubmedArticle'][0]['MedlineCitation']['MeshHeadingList'][0]['QualifierName'][0].attributes.items())['UI']
+print(df_freq)
