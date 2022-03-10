@@ -3,10 +3,11 @@ import shutil
 from Bio import Entrez
 import xml.etree.ElementTree as ET
 import pandas as pd
+from itertools import combinations
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
 Entrez.email = 'email@example.com'
-Entrez.api_key = '0000'
+Entrez.api_key = '00000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
 path_pmid = './entrez_data/pmids'
@@ -16,7 +17,7 @@ path_articles = './entrez_data/articles'
 default_search_term = 'Alzheimer'
 
 #Number of most recent articles to query
-n_articles_max = 25000
+n_articles_max = 1000
 
 #Exclude articles that are not MESH tagged?
 exclude_untagged = True
@@ -45,7 +46,7 @@ def export_xml_pmids_given_searchterm(file_path = path_pmid, t=default_search_te
         if num_left < batch_size:
             r_max = num_left
         
-        handle = Entrez.esearch(retstart=start, retmax=r_max, term=t, sort='pub date', db='pubmed', retmode='xml',**paramEutils)
+        handle = Entrez.esearch(db='pubmed',retstart=start, retmax=r_max, term=t, sort='pub date', retmode='xml',**paramEutils)
         record = handle.read()
         handle.close()
         file_name = file_path + '/pmid_list_' + str(file_id) + '.xml'
@@ -100,7 +101,7 @@ def get_xml_articles_given_pmids(PMID_list=[], file_path = path_articles, count=
             if num_left < batch_size:
                 r_max = num_left
                 
-            ids_to_fetch = ','.join(P[start:end])
+            ids_to_fetch = ','.join(PMID_list[start:end])
             
             handle = Entrez.efetch(id=ids_to_fetch, db='pubmed', rettype='xml')
             record = handle.read()
@@ -160,8 +161,10 @@ def merge_articles(file_path = path_articles, output_file = 'merged.xml'):
         
 
 
-def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_untagged):
+def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_untagged, gen_major_qualifiers = False, gen_append_mesh = False):
     #Returns a Pandas dataframe containing relevant information from XML files located at file_path folder
+    #Setting gen_major_qualifiers = True will generate an additional column which appends major topics with * (i.e. Smoking*)
+    #Setting gen_append_mesh = True will generate an additional column which appends the unfiltered mesh data for custom processing
     
     files = os.listdir(file_path)
     if '.DS_Store' in files:
@@ -172,10 +175,12 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
     PMID_df = []
     Mesh_df = []
     Desc_names_df = []
-    All_tags_df = []
     All_tags_no_major_df = []
+    All_tags_df = []
         
     for file in files:
+        print('Importing data from ' + file + '...')
+        
         file_dir = file_path + '/' + file
         record = import_xml_entrez(file_dir)
         num_articles = len(record['PubmedArticle'])
@@ -209,7 +214,9 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
                         if dict(mesh_of_article[i]['QualifierName'][j].attributes.items())['MajorTopicYN'] == 'Y':
                             tag_str += '*' 
                         
-                        all_tags_temp.append(tag_str)
+                        if gen_major_qualifiers:
+                            all_tags_temp.append(tag_str)
+                            
                         all_tags_no_major_temp.append(tag_str_no_major)
                 else:
                     tag_str = str(mesh_of_article[i]['DescriptorName'])
@@ -219,23 +226,33 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
                     if dict(mesh_of_article[i]['DescriptorName'].attributes.items())['MajorTopicYN'] == 'Y':
                         tag_str += '*'
                         
-                    all_tags_temp.append(tag_str)
+                    if gen_major_qualifiers:
+                        all_tags_temp.append(tag_str)
+                        
                     all_tags_no_major_temp.append(tag_str_no_major)
                     
             if not(not(is_tagged) and exclude_utag):
                 PMID_df.append(PMID)                   
-                Mesh_df.append(mesh_temp)
                 Desc_names_df.append(desc_names_temp)
-                All_tags_df.append(all_tags_temp)
                 All_tags_no_major_df.append(all_tags_no_major_temp)
                 
-    d = {'pmid': PMID_df, 'mesh': Mesh_df, 'major_tags': Desc_names_df, 'all_tags': All_tags_df,'all_tags_no_major': All_tags_no_major_df}
-    df = pd.DataFrame(data=d)
+                if gen_append_mesh:
+                    Mesh_df.append(mesh_temp)
+                if gen_major_qualifiers:
+                    All_tags_df.append(all_tags_temp)
+                    
+    d = {'pmid': PMID_df, 'main_tags': Desc_names_df,'all_tags_no_major_topic': All_tags_no_major_df}
     
+    if gen_major_qualifiers:
+        d['all_tags_with_qualifiers'] = All_tags_df
+    if gen_append_mesh:
+        d['mesh'] = Mesh_df
+        
+    df = pd.DataFrame(data=d)
     return df
 
-def pd_freq_table(df, column = 'major_tags'):
-    #Returns a Pandas data frame containing Frequency data for tags in tag columns all_tags, major_tags, etc.
+def pd_freq_table(df, column = 'main_tags'):
+    #Returns a Pandas data frame containing Frequency data for lists of tags in tag columns all_tags, major_tags, etc.
     num_articles = len(df)
     Temp_list = []
     for i in range(len(df[column])):
@@ -249,22 +266,50 @@ def pd_freq_table(df, column = 'major_tags'):
     
     return Freq_df
 
+def pd_freq_table_remove_values(df, f_upper_limit = 0.333333333333333, count_lower_limit = 5):
+    #removes values from dataframe with freq > f_limit and count <= count_lower_limit
+    
+    df_freq_updated = df
+
+    for i in range(len(df_freq['freq'])):
+        f = df_freq['freq'][i]
+        if f > f_upper_limit:
+            df_freq_updated = df_freq_updated.drop([i])
+        else:
+            break
+            
+    for i in reversed(range(len(df_freq['freq']))):
+        if df_freq['count'][i] <= count_lower_limit:
+            df_freq_updated = df_freq_updated.drop([i])
+        else:
+            break
+            
+    df_freq_updated = df_freq_updated.reset_index(drop=True)
+    
+    return df_freq_updated
+
 ################################
 # End Function Initialization
 ################################
 
 #Generate XML files for given search parameters
-##export_xml_pmids_given_searchterm()
-##P = import_pmid_xml_batch()
-##get_xml_articles_given_pmids(PMID_list=P)
+export_xml_pmids_given_searchterm()
+P = import_pmid_xml_batch()
+get_xml_articles_given_pmids(PMID_list=P)
 
 #Use to generate main dataframe. Can comment and import .pkl files for faster use after generation
 #Using df.to_json('df.json') and pd.read_json('df.json')
 
-#df = pd_dataframe_xml_multiple()
-#df.to_json('df.json')
+df = pd_dataframe_xml_multiple()
+df.to_json('df.json')
 
-df = pd.read_json('df.json')
-df_freq = pd_freq_table(df, column = 'major_tags')
+#df = pd.read_json('df_120k.json')
+
+df_freq = pd_freq_table(df, column = 'main_tags')
 
 print(df_freq)
+
+#Remove items with too high frequency, f_limit, are removed and placed in df_freq_updated
+df_freq_updated = pd_freq_table_remove_values(df_freq)
+
+print(df_freq_updated)
