@@ -297,7 +297,7 @@ export_xml_pmids_given_searchterm()
 P = import_pmid_xml_batch()
 get_xml_articles_given_pmids(PMID_list=P)
 
-#Use to generate main dataframe. Can comment and import .pkl files for faster use after generation
+#Use to generate main dataframe. Can comment and import .json files for faster use after generation
 #Using df.to_json('df.json') and pd.read_json('df.json')
 
 df = pd_dataframe_xml_multiple()
