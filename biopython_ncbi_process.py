@@ -7,7 +7,7 @@ from itertools import combinations
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
 Entrez.email = 'email@example.com'
-Entrez.api_key = '00000'
+Entrez.api_key = '0000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
 path_pmid = './entrez_data/pmids'
@@ -17,10 +17,11 @@ path_articles = './entrez_data/articles'
 default_search_term = 'Alzheimer'
 
 #Number of most recent articles to query
-n_articles_max = 1000
+n_articles_max = 194750
 
 #Exclude articles that are not MESH tagged?
-exclude_untagged = True
+#SET TO FALSE FOR NOW. DO NOT CHANGE VALUE
+exclude_untagged = False
 
 #Cache results
 paramEutils = { 'usehistory':'Y' }
@@ -177,6 +178,8 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
     Desc_names_df = []
     All_tags_no_major_df = []
     All_tags_df = []
+    Keywords_df = []
+    RN_df = []
         
     for file in files:
         print('Importing data from ' + file + '...')
@@ -198,7 +201,30 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
             desc_names_temp = []
             all_tags_temp = []
             all_tags_no_major_temp = []
-            
+            kw_temp = []
+            rn_temp = []
+
+            #If there are keywords present
+            if len(record['PubmedArticle'][a]['MedlineCitation']['KeywordList']) != 0:
+                #for every keyword
+                for i in range(len(record['PubmedArticle'][a]['MedlineCitation']['KeywordList'][0])):
+                    #add keyword string to temporary list
+                    kw_temp.append(str(record['PubmedArticle'][a]['MedlineCitation']['KeywordList'][0][i]))
+
+            #if there are RN values present
+            if 'ChemicalList' in record['PubmedArticle'][a]['MedlineCitation'].keys():
+                
+                RN_of_a = record['PubmedArticle'][a]['MedlineCitation']['ChemicalList']
+                
+                #If the RN field isn't empty
+                if len(RN_of_a) != 0:
+                    for i in range(len(RN_of_a)):
+                        rn_name_string = str(RN_of_a[i]['NameOfSubstance'])
+                        rn_id_string = str(RN_of_a[i]['RegistryNumber'])
+                        rn_str_temp = 'RN: ' + rn_id_string + ' (' + rn_name_string + ')'
+                        rn_temp.append(rn_name_string)
+
+                        
             for i in range(len(mesh_of_article)):
                 mesh_temp.append(mesh_of_article[i])
                 desc_names_temp.append((str(mesh_of_article[i]['DescriptorName'])))
@@ -231,17 +257,19 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
                         
                     all_tags_no_major_temp.append(tag_str_no_major)
                     
-            if not(not(is_tagged) and exclude_utag):
+            if not(exclude_utag):
                 PMID_df.append(PMID)                   
                 Desc_names_df.append(desc_names_temp)
                 All_tags_no_major_df.append(all_tags_no_major_temp)
+                Keywords_df.append(kw_temp)
+                RN_df.append(rn_temp)
                 
                 if gen_append_mesh:
                     Mesh_df.append(mesh_temp)
                 if gen_major_qualifiers:
                     All_tags_df.append(all_tags_temp)
                     
-    d = {'pmid': PMID_df, 'main_tags': Desc_names_df,'all_tags_no_major_topic': All_tags_no_major_df}
+    d = {'pmid': PMID_df, 'main_tags': Desc_names_df,'all_tags_no_major_topic': All_tags_no_major_df, 'keywords': Keywords_df, 'rn_values': RN_df}
     
     if gen_major_qualifiers:
         d['all_tags_with_qualifiers'] = All_tags_df
@@ -293,23 +321,32 @@ def pd_freq_table_remove_values(df, f_upper_limit = 0.333333333333333, count_low
 ################################
 
 #Generate XML files for given search parameters
-export_xml_pmids_given_searchterm()
-P = import_pmid_xml_batch()
-get_xml_articles_given_pmids(PMID_list=P)
+#export_xml_pmids_given_searchterm()
+#P = import_pmid_xml_batch()
+#get_xml_articles_given_pmids(PMID_list=P)
 
 #Use to generate main dataframe. Can comment and import .json files for faster use after generation
 #Using df.to_json('df.json') and pd.read_json('df.json')
 
-df = pd_dataframe_xml_multiple()
-df.to_json('df.json')
+#df = pd_dataframe_xml_multiple()
+#df.to_json('df.json')
+#df = pd.read_json('df.json')
 
-#df = pd.read_json('df_120k.json')
+
+d = []
+df.insert(0,'merge_tag_rn','')
+for i in range(len(df)):
+    t = df['main_tags'][i]
+    r = df['rn_values'][i]
+    v = list(set(t+r))
+    d.append(v)
+    
+df['merge_tag_rn'] = d
 
 df_freq = pd_freq_table(df, column = 'main_tags')
-
 print(df_freq)
 
 #Remove items with too high frequency, f_limit, are removed and placed in df_freq_updated
 df_freq_updated = pd_freq_table_remove_values(df_freq)
-
 print(df_freq_updated)
+
