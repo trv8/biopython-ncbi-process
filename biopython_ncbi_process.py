@@ -4,10 +4,11 @@ from Bio import Entrez
 import xml.etree.ElementTree as ET
 import pandas as pd
 from itertools import combinations
+import time
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
 Entrez.email = 'email@example.com'
-Entrez.api_key = '0000'
+Entrez.api_key = '000000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
 path_pmid = './entrez_data/pmids'
@@ -288,33 +289,76 @@ def pd_freq_table(df, column = 'main_tags'):
             Temp_list.append(df[column][i][j])
 
     Temp_list = pd.Series(Temp_list)
-    Freq_df = Temp_list.value_counts()
-    Freq_df = pd.DataFrame({column:Freq_df.index, 'count':Freq_df.values})
-    Freq_df['freq'] = Freq_df['count']/num_articles
+    df_freq = Temp_list.value_counts()
+    df_freq = pd.DataFrame({column:df_freq.index, 'count':df_freq.values})
+    df_freq['freq'] = df_freq['count']/num_articles
     
-    return Freq_df
+    return df_freq
 
-def pd_freq_table_remove_values(df, f_upper_limit = 0.333333333333333, count_lower_limit = 5):
+def pd_freq_table_remove_values(df_freq, f_upper_limit = 0.333333333333333, count_lower_limit = 5):
     #removes values from dataframe with freq > f_limit and count <= count_lower_limit
-    
-    df_freq_updated = df
-
-    for i in range(len(df_freq['freq'])):
-        f = df_freq['freq'][i]
-        if f > f_upper_limit:
-            df_freq_updated = df_freq_updated.drop([i])
-        else:
-            break
-            
-    for i in reversed(range(len(df_freq['freq']))):
-        if df_freq['count'][i] <= count_lower_limit:
-            df_freq_updated = df_freq_updated.drop([i])
-        else:
-            break
-            
-    df_freq_updated = df_freq_updated.reset_index(drop=True)
+    df_freq_updated = df_freq
+    df_freq_updated = df_freq_updated[df_freq_updated['freq'] < f_upper_limit]
+    df_freq_updated = df_freq_updated[df_freq_updated['count'] > count_lower_limit]
     
     return df_freq_updated
+
+
+def generate_pair_pmid(df):
+    #returns pandas dataframe containing all pairs of PMIDs under column 'pmid'
+    #must also contain column with explicit indices 'index'
+    PMID_list = df['pmid']
+    index_list = df['index']
+    left_pmid = []
+    right_pmid = []
+    left_i = []
+    right_i = []
+    comb = combinations(range(len(PMID_list)),2)
+    
+    for c in comb:
+        left_index = c[0]
+        right_index = c[1]
+        left_pmid.append(PMID_list[left_index])
+        right_pmid.append(PMID_list[right_index])
+        left_i.append(index_list[left_index])
+        right_i.append(index_list[right_index])
+
+    d = {'leftpmid': left_pmid, 'rightpmid': right_pmid, 'lefti': left_i, 'righti': right_i}
+    df_pairs = pd.DataFrame(data=d)
+    return df_pairs
+
+
+def compute_distance_pmid_pair(df, df_pairs, df_freq):
+    #Given a dataframe df_pairs containing pairs of pmids (leftpmid, rightpmid, lefti, righti)
+    #and a main dataframe with R/L indices, computes distance metric
+    scores = []
+
+    #Generate an explicit dictionary of term <-> frequency pairs. Keys = term, values = freq
+    F_dict = dict(zip(df_freq.merge_tag_rn, df_freq.freq))
+    
+    for p in range(len(df_pairs)):
+        lefti_df = df_pairs['lefti'][p]
+        righti_df = df_pairs['righti'][p]
+        left_set = df.iloc[lefti_df]['merge_tag_rn']
+        right_set = df.iloc[righti_df]['merge_tag_rn']
+
+        shared_tags_list = list(set(left_set) & set(right_set))
+        similarity_score = 0
+        for i in range(len(shared_tags_list)):
+            term = shared_tags_list[i]
+
+            #This if statement allows for processing post-filtered sets
+            if term in F_dict.keys():
+                similarity_score += 1.0/F_dict[term]
+
+        similarity_score = round(similarity_score)
+        scores.append(similarity_score)
+
+
+    df_pairs_scored = df_pairs.assign(sim_score = scores)
+    
+    return df_pairs_scored
+        
 
 ################################
 # End Function Initialization
@@ -329,8 +373,10 @@ def pd_freq_table_remove_values(df, f_upper_limit = 0.333333333333333, count_low
 #Using df.to_json('df.json') and pd.read_json('df.json')
 
 #df = pd_dataframe_xml_multiple()
+
 #df.to_json('df.json')
-#df = pd.read_json('df.json')
+
+df = pd.read_json('df.json')
 
 
 d = []
@@ -343,10 +389,35 @@ for i in range(len(df)):
     
 df['merge_tag_rn'] = d
 
-df_freq = pd_freq_table(df, column = 'main_tags')
-print(df_freq)
+
+
+df2 = df.sample(n=100)
+df2 = df2.reset_index()
+print('Generating PMID pairs...')
+df_pairs = generate_pair_pmid(df2)
+
+print('Generating frequency table...')
+df_freq = pd_freq_table(df, column = 'merge_tag_rn')
+
+#Filters data
+print('Filtering frequency data...')
+df_freq_updated = pd_freq_table_remove_values(df_freq)
+
+print('Scoring...')
+df_pairs_scored = compute_distance_pmid_pair(df,df_pairs,df_freq_updated)
+
+
+
+##import matplotlib.pyplot as plt
+##df_pairs_scored['sim_score'].plot.hist(bins=1000)
+##plt.show()
+
+
+#df_freq = pd_freq_table(df, column = 'main_tags')
+
+#print(df_freq)
 
 #Remove items with too high frequency, f_limit, are removed and placed in df_freq_updated
-df_freq_updated = pd_freq_table_remove_values(df_freq)
-print(df_freq_updated)
+#df_freq_updated = pd_freq_table_remove_values(df_freq)
 
+#print(df_freq_updated)
