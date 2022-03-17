@@ -5,10 +5,15 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 from itertools import combinations
 import time
+import math
+
+import numpy as np
+from sklearn.cluster import AgglomerativeClustering
+from scipy.spatial.distance import pdist, squareform
 
 #Email (required) and API key (optional) used for NCBI Entrez queries
 Entrez.email = 'email@example.com'
-Entrez.api_key = '000000'
+Entrez.api_key = '0000000'
 
 #Path folders (2 required) for storing output XMLs: pmid_list XMLs and article_summaries XMLs
 path_pmid = './entrez_data/pmids'
@@ -181,6 +186,7 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
     All_tags_df = []
     Keywords_df = []
     RN_df = []
+    Merged_mesh_rn_df = []
         
     for file in files:
         print('Importing data from ' + file + '...')
@@ -204,7 +210,7 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
             all_tags_no_major_temp = []
             kw_temp = []
             rn_temp = []
-
+            
             #If there are keywords present
             if len(record['PubmedArticle'][a]['MedlineCitation']['KeywordList']) != 0:
                 #for every keyword
@@ -257,20 +263,23 @@ def pd_dataframe_xml_multiple(file_path = path_articles, exclude_utag = exclude_
                         all_tags_temp.append(tag_str)
                         
                     all_tags_no_major_temp.append(tag_str_no_major)
-                    
+
+            
+                
             if not(exclude_utag):
                 PMID_df.append(PMID)                   
                 Desc_names_df.append(desc_names_temp)
                 All_tags_no_major_df.append(all_tags_no_major_temp)
                 Keywords_df.append(kw_temp)
                 RN_df.append(rn_temp)
+                Merged_mesh_rn_df.append(list(set(rn_temp+desc_names_temp)))
                 
                 if gen_append_mesh:
                     Mesh_df.append(mesh_temp)
                 if gen_major_qualifiers:
                     All_tags_df.append(all_tags_temp)
                     
-    d = {'pmid': PMID_df, 'main_tags': Desc_names_df,'all_tags_no_major_topic': All_tags_no_major_df, 'keywords': Keywords_df, 'rn_values': RN_df}
+    d = {'pmid': PMID_df, 'main_tags': Desc_names_df,'all_tags_no_major_topic': All_tags_no_major_df, 'keywords': Keywords_df, 'rn_values': RN_df, 'merge_tag_rn': Merged_mesh_rn_df}
     
     if gen_major_qualifiers:
         d['all_tags_with_qualifiers'] = All_tags_df
@@ -304,61 +313,245 @@ def pd_freq_table_remove_values(df_freq, f_upper_limit = 0.333333333333333, coun
     return df_freq_updated
 
 
-def generate_pair_pmid(df):
-    #returns pandas dataframe containing all pairs of PMIDs under column 'pmid'
-    #must also contain column with explicit indices 'index'
-    PMID_list = df['pmid']
-    index_list = df['index']
-    left_pmid = []
-    right_pmid = []
-    left_i = []
-    right_i = []
-    comb = combinations(range(len(PMID_list)),2)
-    
-    for c in comb:
-        left_index = c[0]
-        right_index = c[1]
-        left_pmid.append(PMID_list[left_index])
-        right_pmid.append(PMID_list[right_index])
-        left_i.append(index_list[left_index])
-        right_i.append(index_list[right_index])
+##def generate_pair_pmid(df):
+##    #returns pandas dataframe containing all pairs of PMIDs under column 'pmid'
+##    #must also contain column with explicit indices 'index'
+##    PMID_list = df['pmid']
+##    index_list = df['index']
+##    left_pmid = []
+##    right_pmid = []
+##    left_i = []
+##    right_i = []
+##    comb = combinations(range(len(PMID_list)),2)
+##    
+##    for c in comb:
+##        left_index = c[0]
+##        right_index = c[1]
+##        left_pmid.append(PMID_list[left_index])
+##        right_pmid.append(PMID_list[right_index])
+##        left_i.append(index_list[left_index])
+##        right_i.append(index_list[right_index])
+##
+##    d = {'leftpmid': left_pmid, 'rightpmid': right_pmid, 'lefti': left_i, 'righti': right_i}
+##    df_pairs = pd.DataFrame(data=d)
+##    return df_pairs
 
-    d = {'leftpmid': left_pmid, 'rightpmid': right_pmid, 'lefti': left_i, 'righti': right_i}
-    df_pairs = pd.DataFrame(data=d)
-    return df_pairs
 
-
-def compute_distance_pmid_pair(df, df_pairs, df_freq):
-    #Given a dataframe df_pairs containing pairs of pmids (leftpmid, rightpmid, lefti, righti)
-    #and a main dataframe with R/L indices, computes distance metric
-    scores = []
+def compute_distance_pmid_pair(df, df_freq):
+    #Given a dataframe df, generates df_pairs containing pairs of pmids (leftpmid, rightpmid)
+    #with a computed distance metric. NOTE: will reset index
+    df = df.reset_index(drop=True)
 
     #Generate an explicit dictionary of term <-> frequency pairs. Keys = term, values = freq
     F_dict = dict(zip(df_freq.merge_tag_rn, df_freq.freq))
+    #Size of arrays = len(df) choose 2
+    N = math.comb(len(df),2)
+    c_generator = combinations(df.index, 2)
+
+    #Pre-generate empty numpy arrays
+    scores = np.zeros(N, dtype=np.uint32)
+    leftpmid = np.zeros(N, dtype=np.uint32)
+    rightpmid = np.zeros(N, dtype=np.uint32)
+
     
-    for p in range(len(df_pairs)):
-        lefti_df = df_pairs['lefti'][p]
-        righti_df = df_pairs['righti'][p]
+    for i in range(N):
+        
+        p_indices = next(c_generator)
+        lefti_df = p_indices[0]
+        righti_df = p_indices[1]
         left_set = df.iloc[lefti_df]['merge_tag_rn']
         right_set = df.iloc[righti_df]['merge_tag_rn']
 
         shared_tags_list = list(set(left_set) & set(right_set))
         similarity_score = 0
-        for i in range(len(shared_tags_list)):
-            term = shared_tags_list[i]
+        for j in range(len(shared_tags_list)):
+            term = shared_tags_list[j]
 
             #This if statement allows for processing post-filtered sets
             if term in F_dict.keys():
-                similarity_score += 1.0/F_dict[term]
+                #Compute similarity score
+                similarity_score += (1.0/F_dict[term])
 
+        #Empirical division based on 'overtagging'
+        #if similarity_score>0:
+        #    l_avg_set = (len(left_set) + len(right_set))/2.0
+        #    similarity_score /= (0.024 * (l_avg_set) ** 1.5)
+        #End empirical adjustment
+        
         similarity_score = round(similarity_score)
-        scores.append(similarity_score)
+        scores[i] = similarity_score
+        leftpmid[i] = df['pmid'][lefti_df]
+        rightpmid[i] = df['pmid'][righti_df]
 
-
-    df_pairs_scored = df_pairs.assign(sim_score = scores)
+    df_pairs_scored = pd.DataFrame({'leftpmid': leftpmid, 'rightpmid': rightpmid, 'sim_score': scores})
     
     return df_pairs_scored
+
+
+def to_file_pmid_pair_chunks(df, df_freq, write_file = "paired_scores.csv", chunk_size = 100000, print_progress = True):
+    #Given a dataframe df and frequency dataframe df_freq, generates csv containing pairs of pmids
+    #with associated distance metric. (pmid1, pmid2, score)
+    s=time.time()
+    df = df.reset_index(drop=True)
+
+    with open(write_file, 'w') as file:
+        file.write('pmid1,pmid2,score')
+        file.write('\n')
+
+    #Generate an explicit dictionary of term <-> frequency pairs. Keys = term, values = freq
+    F_dict = dict(zip(df_freq.merge_tag_rn, df_freq.freq))
+    
+    #Size of arrays = len(df) choose 2
+    N = math.comb(len(df),2)
+
+    #Generator object for all pairs of combinations of PMIDs
+    c_generator = combinations(df.index, 2)
+
+    leftpmids_temp = []
+    rightpmids_temp = []
+    scores_temp = []
+    
+    for i in range(N):
+        p_indices = next(c_generator)
+        left_row = df.iloc[p_indices[0]]
+        right_row = df.iloc[p_indices[1]]
+        left_set = left_row['merge_tag_rn']
+        right_set = right_row['merge_tag_rn']
+
+        #Intersection of set of tags from pmid1 and pmid2
+        shared_tags_list = list(set(left_set) & set(right_set))
         
+        similarity_score = 0
+        for j in range(len(shared_tags_list)):
+            term = shared_tags_list[j]
+
+            #This if statement allows for processing post-filtered sets
+            if term in F_dict.keys():
+                #Compute similarity score
+                similarity_score += (1.0/F_dict[term])
+        
+        similarity_score = round(similarity_score)
+
+        leftpmids_temp.append(left_row['pmid'])
+        rightpmids_temp.append(right_row['pmid'])
+        scores_temp.append(similarity_score)
+
+        lines_left = N - i
+
+        if i%chunk_size == 0 and lines_left >= chunk_size:
+            file = open(write_file, 'a')
+            for k in range(len(scores_temp)):
+                file.write(','.join([str(leftpmids_temp[k]), str(rightpmids_temp[k]), str(scores_temp[k])]))
+                file.write('\n')
+                
+            file.close()
+                
+            leftpmids_temp = []
+            rightpmids_temp = []
+            scores_temp = []
+
+        elif (1+i)-N == 0:
+            file = open(write_file, 'a')
+            for k in range(len(scores_temp)):
+                file.write(','.join([str(leftpmids_temp[k]), str(rightpmids_temp[k]), str(scores_temp[k])]))
+
+                if (k+1) < len(scores_temp):
+                    file.write('\n')
+                    
+            file.close()
+
+        if print_progress:
+            if i%int(N/100) == 0:
+                print('Progress: '+str(int(100*i/N)) + str('% done. ') + 'Total time elapsed: ' + str(time.time()-s) + ' seconds')
+    
+    print('Done in ' + str(time.time()-s) + ' seconds!')
+    return 0
+
+
+
+
+def partition_df_by_term(df, term="Animals"):
+    #Takes main dataframe and returns 2 dataframes. First df is all articles containing term, 2nd is all without
+    df_copy = df.copy()
+    d = []
+    df_copy.insert(0,'has_term','')
+
+    for i in range(len(df)):
+        if term in set(df['merge_tag_rn'][i]):
+            d.append(1) #Has term = 1, does not have=0
+        else:
+            d.append(0)
+
+    df_copy['has_term'] = d
+    mask = df_copy['has_term'] > 0
+    
+    df1 = df[mask]
+    df2 = df[~mask]
+    
+    return df1,df2
+
+
+def final_to_file_pmid_pair(df, df_freq, write_file = "paired_scores.csv", print_progress = True):
+    #Given a dataframe df and frequency dataframe df_freq, generates csv containing pairs of pmids
+    #with associated distance metric. (pmid1, pmid2, score)
+    s=time.time()
+    df = df.reset_index(drop=True)
+
+    with open(write_file, 'w') as file:
+        file.write('pmid1,pmid2,score')
+        file.write('\n')
+
+    #Generate an explicit dictionary of term <-> frequency pairs. Keys = term, values = freq
+    F_dict = dict(zip(df_freq.merge_tag_rn, df_freq.freq))
+
+    #Generate another explicit dictionary of index <-> PMID pairs
+    PMID_dict = dict(zip(df.index, df.pmid))
+
+    #Generate yet another explicit dictionary of index <-> taglist pairs
+    Tag_dict = dict(zip(df.index, df.merge_tag_rn))
+    
+    #Size of arrays = len(df) choose 2
+    N = math.comb(len(df),2)
+
+    #Generator object for all pairs of combinations of PMIDs
+    c_generator = combinations(df.index, 2)
+
+    file = open(write_file, 'a')
+    
+    for i in range(N):
+        p_indices = next(c_generator)
+        left_set = Tag_dict[p_indices[0]]
+        right_set = Tag_dict[p_indices[1]]
+
+        #Intersection of set of tags from pmid1 and pmid2
+        shared_tags_list = list(set(left_set) & set(right_set))
+        
+        similarity_score = 0
+        for term in shared_tags_list:
+
+            #This if statement allows for processing post-filtered sets
+            if term in F_dict.keys():
+                #Compute similarity score
+                similarity_score += (1.0/F_dict[term])
+        
+        similarity_score = round(similarity_score)
+
+        leftpmid = PMID_dict[p_indices[0]]
+        rightpmid = PMID_dict[p_indices[1]]
+       
+        file.write(','.join([str(leftpmid), str(rightpmid), str(similarity_score)]))
+
+        if (i+1)< N:
+            file.write('\n')
+
+        if print_progress:
+            if i%int(N/100) == 0:
+                print('Progress: '+str(int(100*i/N)) + str('% done. ') + 'Total time elapsed: ' + str(time.time()-s) + ' seconds')
+                
+    file.close()
+    print('Done in ' + str(time.time()-s) + ' seconds!')
+    return 0
+
 
 ################################
 # End Function Initialization
@@ -373,51 +566,13 @@ def compute_distance_pmid_pair(df, df_pairs, df_freq):
 #Using df.to_json('df.json') and pd.read_json('df.json')
 
 #df = pd_dataframe_xml_multiple()
-
 #df.to_json('df.json')
 
-df = pd.read_json('df.json')
+
+df = pd.read_json('df_main.json')
+df_freq = pd.read_json('df_freq.json')
 
 
-d = []
-df.insert(0,'merge_tag_rn','')
-for i in range(len(df)):
-    t = df['main_tags'][i]
-    r = df['rn_values'][i]
-    v = list(set(t+r))
-    d.append(v)
-    
-df['merge_tag_rn'] = d
+df2 = df.sample(n=10, random_state=1)
+df2 = df2.reset_index(drop=True)
 
-
-
-df2 = df.sample(n=100)
-df2 = df2.reset_index()
-print('Generating PMID pairs...')
-df_pairs = generate_pair_pmid(df2)
-
-print('Generating frequency table...')
-df_freq = pd_freq_table(df, column = 'merge_tag_rn')
-
-#Filters data
-print('Filtering frequency data...')
-df_freq_updated = pd_freq_table_remove_values(df_freq)
-
-print('Scoring...')
-df_pairs_scored = compute_distance_pmid_pair(df,df_pairs,df_freq_updated)
-
-
-
-##import matplotlib.pyplot as plt
-##df_pairs_scored['sim_score'].plot.hist(bins=1000)
-##plt.show()
-
-
-#df_freq = pd_freq_table(df, column = 'main_tags')
-
-#print(df_freq)
-
-#Remove items with too high frequency, f_limit, are removed and placed in df_freq_updated
-#df_freq_updated = pd_freq_table_remove_values(df_freq)
-
-#print(df_freq_updated)
